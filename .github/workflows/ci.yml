@@ -28,6 +28,8 @@ jobs:
       # Includes the store on Postgres: PGlite, in-process, through the real driver.
       - run: pnpm test
       - run: pnpm build
+      # The Helm chart: that it lints and renders what its values say.
+      - run: sh charts/discordllm-bot/tests/run.sh
 
   release:
     name: Publish the package
@@ -36,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -50,5 +53,15 @@ jobs:
       # bot never compiles the library and needs no registry login.
       - run: pnpm pack
       - run: gh release create "$GITHUB_REF_NAME" discordllm-*.tgz --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+      # The chart, versioned with the library: oci://ghcr.io/<owner>/charts/discordllm-bot
+      - name: Publish the Helm chart
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          owner="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          helm package charts/discordllm-bot --version "$version" --app-version "$version"
+          helm push "discordllm-bot-$version.tgz" "oci://ghcr.io/$owner/charts"
         env:
           GH_TOKEN: ${{ github.token }}

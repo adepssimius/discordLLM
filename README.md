@@ -288,6 +288,30 @@ jobs:
 
 It typechecks, tests and builds, then on a push publishes the image.
 
+## Deploying a bot to Kubernetes
+
+[`charts/discordllm-bot`](charts/discordllm-bot) is a Helm chart for one bot:
+its pod, its settings, its secrets and the volume it keeps everything on. It
+is published with each release as
+`oci://ghcr.io/adepssimius/charts/discordllm-bot`.
+
+```yaml
+image:
+  repository: ghcr.io/you/yourbot
+  tag: main-12-abc1234
+config:
+  DISCORD_GUILD_ID: "123456789012345678"
+  DISCORD_CHAT_CHANNEL_IDS: "123456789012345678"
+envFromSecrets: [yourbot-env] # a Secret holding DISCORD_BOT_TOKEN, CLAUDE_CODE_OAUTH_TOKEN, …
+persistence:
+  size: 2Gi
+```
+
+The chart creates the volume, or takes an existing claim. Secrets can come
+from values, from a Secret you made, or from any secret operator; nothing in
+it assumes a particular one. Its [README](charts/discordllm-bot/README.md)
+covers the values, secrets, and Flux with image automation.
+
 ## Developing this library
 
 ```bash

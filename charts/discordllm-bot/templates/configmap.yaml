@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bot.fullname" . }}-config
+  labels:
+    {{- include "bot.labels" . | nindent 4 }}
+data:
+  {{- range $name, $value := .Values.config }}
+  {{ $name }}: {{ $value | toString | quote }}
+  {{- end }}
+  {{- if and .Values.persistence.enabled (not (hasKey .Values.config "DATA_DIR")) }}
+  DATA_DIR: {{ .Values.persistence.mountPath | quote }}
+  {{- end }}
+  {{- if not (hasKey .Values.config "HTTP_PORT") }}
+  HTTP_PORT: {{ .Values.httpPort | toString | quote }}
+  {{- end }}
