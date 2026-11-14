@@ -1,0 +1,87 @@
+# Reusable: a bot's whole CI is
+#
+#   jobs:
+#     bot:
+#       uses: adepssimius/discordLLM/.github/workflows/bot.yml@v0
+#       permissions:
+#         contents: read
+#         packages: write
+#
+# It typechecks, tests and builds the bot, then — on a push, never on a pull
+# request — builds its image with `discordllm-build` and publishes it as
+# ghcr.io/<owner>/<repo>:<tag>, named after the bot's own repository.
+name: Bot
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "24"
+      pnpm-version:
+        type: string
+        default: "11.17.0"
+      publish:
+        description: Publish the image on a push.
+        type: boolean
+        default: true
+    outputs:
+      image:
+        value: ${{ jobs.publish.outputs.image }}
+      tag:
+        value: ${{ jobs.publish.outputs.tag }}
+
+jobs:
+  test:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+      # Not --prod, and never --no-optional: the Agent SDK's Claude Code binary
+      # is an optional dependency.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run --if-present typecheck
+      - run: pnpm run --if-present test
+      - run: pnpm run --if-present build
+
+  publish:
+    name: Publish container image
+    needs: test
+    if: inputs.publish && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      tag: ${{ steps.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Required for the layer cache: the default `docker` driver cannot export one.
+      - uses: docker/setup-buildx-action@v3
+      # Exposes ACTIONS_RUNTIME_TOKEN, which `type=gha` caching needs when
+      # buildx is called from a script rather than from build-push-action.
+      - uses: crazy-max/ghaction-github-runtime@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        run: pnpm exec discordllm-build --push
+      - run: echo "Published \`${{ steps.build.outputs.image }}:${{ steps.build.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
