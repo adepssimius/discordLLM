@@ -310,3 +310,52 @@ describe("when things go wrong", () => {
     expect(backend.runs).toEqual([]);
   });
 });
+
+describe("inspecting the prompt", () => {
+  it("reports what the next turn would be told, without running or recording anything", async () => {
+    const m = manager();
+    const s = await open(m);
+
+    const r = await m.inspect({ session: s, actorId: "u1" });
+    expect(r).toMatchObject({
+      bot: "boxbot",
+      profile: "default",
+      backend: backend.name,
+      interactive: true,
+      systemPrompt: "You look after a box. Level: destructive.",
+      tiers: ["read", "write", "destructive"],
+      approvalLevel: "destructive",
+      servers: ["box"],
+      last: null,
+    });
+    expect(r.header).toContain("- Shelf: A");
+    expect(r.botTools).toEqual(expect.arrayContaining(["mcp__bot__poll", "mcp__bot__schedule_set", "mcp__bot__ship"]));
+
+    expect(backend.runs).toHaveLength(0);
+    expect(await store.raw.all("SELECT id FROM turns")).toEqual([]);
+  });
+
+  it("shows the last turn as it was sent, and says when the system prompt has changed since", async () => {
+    const m = manager();
+    const s = await open(m);
+    backend.script = [{ say: "ok" }];
+    await chat(m, s, "where is the drill?");
+
+    const same = await m.inspect({ session: await fresh(s) });
+    expect(same.last).toMatchObject({ seq: 1, status: "ok", sameSystemPrompt: true, systemPrompt: null });
+    expect(same.last?.prompt).toContain("where is the drill?");
+    expect(same.last?.prompt).toContain("- Shelf: A");
+
+    // The operator raises the approval level; the bot's prompt says so.
+    const stricter = manager({ env: { APPROVAL_LEVEL: "write" } });
+    const changed = await stricter.inspect({ session: await fresh(s) });
+    expect(changed.systemPrompt).toBe("You look after a box. Level: write.");
+    expect(changed.last).toMatchObject({ sameSystemPrompt: false, systemPrompt: "You look after a box. Level: destructive." });
+  });
+
+  it("describes a scheduled run: no scheduling tools, none of the bot's interactive ones", async () => {
+    const r = await manager().inspect({ interactive: false });
+    expect(r).toMatchObject({ interactive: false, session: null, last: null });
+    expect(r.botTools).toEqual(["mcp__bot__poll"]);
+  });
+});

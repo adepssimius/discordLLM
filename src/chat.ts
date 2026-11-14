@@ -12,6 +12,7 @@ import { buildCard } from "./discord/approvalCard.js";
 import { isImage, safeName } from "./discord/files.js";
 import { createLogger } from "./logger.js";
 import { QuotaGuard } from "./quota/budget.js";
+import { renderPromptReport } from "./inspect.js";
 import { fatal } from "./run.js";
 import { recoverInterrupted } from "./session/manager.js";
 import type { PostedFile } from "./session/types.js";
@@ -32,7 +33,12 @@ import type { Approver } from "./agent/approval.js";
  * CHAT_PROFILE picks one; the first is the default.
  *
  * Commands: /new  /stop  /stats  /quit
+ *   /prompt          what the agent is told in this session (no model call)
  *   /attach <path>   post a local file with your next message (bots that take files)
+ *
+ * `chat --prompt` prints that and exits, without a model credential: the way
+ * to see what an edit to a prompt section did. Add `--brief` for what a
+ * scheduled run is told.
  */
 
 const DIM = "\x1b[2m";
@@ -110,7 +116,7 @@ export async function runChat<S extends z.ZodRawShape>(def: BotDefinition<S>): P
   console.log(
     `${DIM}${backend.name} · model ${cfg.AGENT_MODEL ?? "default"} · auth ${ready.source} · ` +
       `servers ${Object.keys(domain.servers).join(", ") || "none"} · ` +
-      `approval ${pcfg.APPROVAL_LEVEL}/${approveAll ? "always" : "never"} · /new /stop /stats${def.attachments ? " /attach" : ""} /quit${RESET}\n`,
+      `approval ${pcfg.APPROVAL_LEVEL}/${approveAll ? "always" : "never"} · /new /stop /stats /prompt${def.attachments ? " /attach" : ""} /quit${RESET}\n`,
   );
 
   // Async-iterator form rather than repeated question(): it terminates cleanly
@@ -178,6 +184,13 @@ export async function runChat<S extends z.ZodRawShape>(def: BotDefinition<S>): P
     if (line === "/stop") {
       manager.abort(session.id);
       console.log(`${DIM}abort flag set — the current run will stop at its next tool call${RESET}\n`);
+      prompt();
+      continue;
+    }
+
+    if (line === "/prompt") {
+      session = (await store.sessions.byId(session.id)) ?? session;
+      console.log(`\n${renderPromptReport(await manager.inspect({ session, actorId: "repl-user" }), pcfg.BOT_TIMEZONE)}`);
       prompt();
       continue;
     }
@@ -268,7 +281,43 @@ export async function runChat<S extends z.ZodRawShape>(def: BotDefinition<S>): P
   await store.close();
 }
 
-/** `runChat`, with the error handling a `chat.ts` wants. */
+/**
+ * Prints what the agent would be told, and exits. Nothing is sent to a model,
+ * so no credential is needed; the bot's own variables are, since `setup` reads
+ * them.
+ */
+export async function showPrompt<S extends z.ZodRawShape>(
+  def: BotDefinition<S>,
+  opts: { readonly brief?: boolean } = {},
+): Promise<void> {
+  const cfg = loadCore(def);
+  const backend = def.backend ?? claudeAgent();
+  // Quiet: the report is the output, and it may be piped to a file.
+  const log = createLogger({ level: "warn", pretty: true, secrets: [...backend.secrets, ...(def.secrets ?? [])] });
+
+  const target = storeTarget(cfg);
+  if (target.kind === "sqlite") mkdirSync(dirname(target.path), { recursive: true });
+  const store = await openStore(target);
+  try {
+    const built = await assembleProfiles(def, { core: cfg, log, store, backend, requireAuthz: false });
+    const wanted = process.env.CHAT_PROFILE;
+    const profile = wanted ? built.find((p) => p.cfg.name === wanted) : built[0];
+    if (!profile) {
+      console.error(wanted ? `No usable profile named '${wanted}'.` : "No usable profile.");
+      process.exitCode = 1;
+      return;
+    }
+    // The REPL's own thread, if it has been used: then the last turn is shown too.
+    const session = opts.brief ? undefined : await store.sessions.byThread(process.env.CHAT_THREAD_ID ?? "repl-thread");
+    const report = await profile.manager.inspect({ session, interactive: !opts.brief, actorId: opts.brief ? null : "repl-user" });
+    process.stdout.write(renderPromptReport(report, profile.cfg.BOT_TIMEZONE));
+  } finally {
+    await store.close();
+  }
+}
+
+/** `runChat`, with the error handling a `chat.ts` wants. `--prompt` prints the prompt instead. */
 export function chat<S extends z.ZodRawShape>(def: BotDefinition<S>): void {
-  runChat(def).catch(fatal);
+  const args = process.argv.slice(2);
+  (args.includes("--prompt") ? showPrompt(def, { brief: args.includes("--brief") }) : runChat(def)).catch(fatal);
 }

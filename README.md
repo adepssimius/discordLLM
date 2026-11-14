@@ -28,6 +28,7 @@ behind [one interface](#another-model) and can be replaced.
 | **Quota guard** | An hourly turn budget and a concurrency cap, so the bot cannot exhaust the subscription you also use in your editor. |
 | **Ledger** | Sessions, turns, every tool call and every approval, in SQLite by default or Postgres. |
 | **REPL** | The same bot from a terminal, with no Discord, for trying things. |
+| **Prompt inspection** | Say `prompt` and the bot posts exactly what its agent is told. Every turn's system prompt is kept in the ledger. |
 | **Image build** | One Dockerfile and one script for every bot; the image is named after the bot's repository. |
 
 ## A bot with no code
@@ -189,12 +190,38 @@ Everything is environment variables. The common ones:
 | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` | |
 | `DISCORD_CHAT_CHANNEL_IDS` | the bot's own channel(s). Or `DISCORD_CHAT_USER_IDS` / `ROLE_IDS`. One of them is required. |
 | `DISCORD_APPROVER_USER_IDS` / `ROLE_IDS` | who may press Approve. Empty means whoever may chat. |
+| `DISCORD_PROMPT_USER_IDS` / `ROLE_IDS` | who may ask for the prompt. Empty means whoever may approve. |
+| `PROMPT_INSPECTION` | `false` turns the `prompt` command off in Discord. Default `true`. |
 | `APPROVAL_LEVEL` | the lowest tier that waits, or `none`. Default: only the top tier. |
 | `BOT_TIMEZONE` | IANA zone for schedules and the date the agent is told |
 | `DATA_DIR`, `HOME` | both on persistent storage |
 | `AGENT_TURNS_PER_HOUR`, `AGENT_MAX_CONCURRENT_RUNS` | the quota guard |
 
 The full list, with why each exists, is [`src/config.ts`](src/config.ts).
+
+### Seeing what the agent is told
+
+When a bot does not behave as you want, look at what it was given. The bot
+builds this itself, from the same code that builds a real turn; it is not the
+model describing its instructions.
+
+- **In Discord:** mention the bot with `prompt`, or say `prompt` in one of its
+  threads. It replies with `prompt.md`: the system prompt, the header that
+  opens every message, the servers and tools, and the approval level. In a
+  thread it adds the last turn as it was actually sent, and that turn's system
+  prompt if it has changed since.
+- **In the REPL:** `/prompt`.
+- **Without a model credential:** `pnpm chat --prompt` (a bot with code) or
+  `pnpm exec discordllm prompt discordllm.json` prints it and exits, so you can
+  edit a prompt section and see the result. Add `--brief` for what a scheduled
+  run is told.
+
+Every turn's system prompt is also kept in the ledger: `turns.system_prompt_hash`
+names a row in `system_prompts`, stored once per distinct text.
+
+Two things are not shown, because the library does not have them: the
+backend's own base prompt that yours is added to, and the tools each MCP
+server offers.
 
 ### The database
 

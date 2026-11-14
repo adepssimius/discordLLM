@@ -21,6 +21,9 @@ import { explainVerdict, type QuotaGuard } from "../quota/budget.js";
 import type { Store } from "../store/index.js";
 import { botTools, POLLS_PER_TURN } from "../tools/bot.js";
 import { filesSince, type WorkspaceProvider } from "../workspace.js";
+import type { PromptReport } from "../inspect.js";
+import { systemPromptHash } from "../store/turns.js";
+import { turnHeader } from "../agent/prompts.js";
 import type { NewToolCall, PollRequest, PostedFile, Schedule, Session, TurnTrigger } from "./types.js";
 
 /**
@@ -45,7 +48,7 @@ export interface ManagerDeps {
   readonly cfg: Config;
   readonly log: Logger;
   readonly store: Store;
-  readonly def: Pick<BotDefinition, "tiers" | "shell" | "skills" | "botServer" | "attachments">;
+  readonly def: Pick<BotDefinition, "tiers" | "shell" | "skills" | "botServer" | "attachments"> & { readonly name?: string };
   /** The model. Everything this class knows about it is the AgentBackend interface. */
   readonly backend: AgentBackend;
   readonly domain: Domain;
@@ -183,6 +186,99 @@ export class SessionManager {
       branch: domain.refFor?.({ id, title, kind }) ?? "",
       scheduleId: input.scheduleId,
     });
+  }
+
+  /**
+   * What a turn in this session would be told right now, and what its last
+   * turn actually was told. Asks the bot's `turn` exactly as a real turn
+   * does, but creates nothing, spends nothing and writes nothing.
+   *
+   * With no session, describes the first turn of a new conversation.
+   */
+  async inspect(req: { session?: Session | undefined; interactive?: boolean; actorId?: string | null } = {}): Promise<PromptReport> {
+    const { cfg, store, def, domain, workspace, backend } = this.deps;
+    const interactive = req.interactive ?? true;
+    const now = Date.now();
+    const session: Session = req.session ?? {
+      id: "00000000-0000-0000-0000-000000000000",
+      profile: cfg.name,
+      kind: interactive ? "chat" : "brief",
+      status: "idle",
+      guildId: "",
+      channelId: "",
+      threadId: "",
+      agentSessionId: null,
+      openedBy: req.actorId ?? null,
+      title: "(a new conversation)",
+      branch: "",
+      scheduleId: null,
+      turnCount: 0,
+      agentTurnCount: 0,
+      costUsd: 0,
+      createdAt: now,
+      updatedAt: now,
+      lastTurnAt: null,
+      closedAt: null,
+    };
+    const dir = workspace.dirFor(session);
+    const own = await domain.turn({
+      session,
+      dir,
+      dirCreated: false,
+      interactive,
+      actorId: req.actorId ?? null,
+      timeZone: cfg.BOT_TIMEZONE,
+      approvalLevel: cfg.APPROVAL_LEVEL,
+      botTool: (name) => `mcp__${this.botServerName}__${name}`,
+    });
+
+    const tools = botTools({
+      cfg,
+      store,
+      serverName: this.botServerName,
+      actorId: req.actorId ?? null,
+      interactive,
+      defaultChannelId: undefined,
+      requestPoll: () => false,
+      runScheduleNow: undefined,
+      extraTools: own.tools,
+    }).map((t) => `mcp__${this.botServerName}__${t.name}`);
+
+    const last = req.session ? await store.turns.last(req.session.id) : undefined;
+    const hash = systemPromptHash(own.systemPrompt);
+    const lastSame = last ? (last.systemPromptHash === null ? null : last.systemPromptHash === hash) : null;
+
+    return {
+      bot: def.name ?? "bot",
+      profile: cfg.name,
+      backend: backend.name,
+      model: cfg.AGENT_MODEL ?? null,
+      interactive,
+      session: req.session ? { id: req.session.id, title: req.session.title, turns: req.session.turnCount } : null,
+      workDir: dir,
+      tiers: this.rules.tiers,
+      approvalLevel: cfg.APPROVAL_LEVEL,
+      servers: Object.keys(domain.servers),
+      botTools: tools,
+      builtinTools: cfg.AGENT_BUILTIN_TOOLS,
+      shell: this.rules.shell,
+      skills: def.skills === true,
+      systemPrompt: own.systemPrompt,
+      systemPromptHash: hash,
+      header: turnHeader({ now: new Date(now), timeZone: cfg.BOT_TIMEZONE, extraLines: own.headerLines }),
+      last: last
+        ? {
+            seq: last.seq,
+            status: last.status,
+            trigger: last.trigger,
+            startedAt: last.startedAt,
+            prompt: last.prompt,
+            sameSystemPrompt: lastSame,
+            systemPrompt:
+              lastSame === false && last.systemPromptHash ? ((await store.turns.systemPrompt(last.systemPromptHash)) ?? null) : null,
+          }
+        : null,
+    };
   }
 
   abort(sessionId: string): void {
@@ -352,6 +448,7 @@ export class SessionManager {
       actorId: req.actorId,
       prompt,
       resumedFrom: resume,
+      systemPrompt: own.systemPrompt,
     });
 
     // A fresh SDK session needs an id we own; a continuing one needs `resume`.

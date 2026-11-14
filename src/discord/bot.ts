@@ -21,6 +21,7 @@ import { ThreadQueue } from "../session/queue.js";
 import type { PollRequest, PostedFile, Schedule, Session } from "../session/types.js";
 import { planAttachments, saveAttachments } from "./files.js";
 import { basename } from "node:path";
+import { promptSummary, renderPromptReport } from "../inspect.js";
 import { checkActor, type AuthzConfig } from "./authz.js";
 import { classifyContent, route, type RouteDecision } from "./router.js";
 import { buildThreadContext, type ContextMessage } from "./context.js";
@@ -28,7 +29,7 @@ import { startTyping } from "./typing.js";
 import { ThreadStreamer, type Sendable } from "./streamer.js";
 import { VoteCollector } from "./votes.js";
 import { splitForDiscord } from "./render.js";
-import { ApprovalDesk } from "./approvals.js";
+import { ApprovalDesk, inspectorAuthz } from "./approvals.js";
 
 export interface BotDeps {
   readonly cfg: CoreConfig;
@@ -75,6 +76,8 @@ const STOP_WORDS = new Set(["stop", "!stop", "/stop", "cancel", "abort"]);
 /** Answered from the database, without a model turn. */
 const THREADS_WORDS = new Set(["threads", "status"]);
 const SCHEDULES_WORDS = new Set(["schedules", "briefs"]);
+/** What the agent is told, from the bot itself. In a thread it describes that thread. */
+const PROMPT_WORDS = new Set(["prompt", "prompts"]);
 
 const BRIEF_FOOTER = "-# Reply to this message, or start a thread from it, to continue.";
 
@@ -362,6 +365,31 @@ export class DiscordBot {
     }
     if (decision.action === "open" && SCHEDULES_WORDS.has(word)) {
       await this.replyChunks(message, await this.schedulesReport(profile));
+      return;
+    }
+
+    // Switched off (PROMPT_INSPECTION=false), the word is just a message.
+    const inspectors = inspectorAuthz(cfg);
+    if (inspectors && (decision.action === "open" || known) && PROMPT_WORDS.has(word)) {
+      const inspector = checkActor(inspectors, {
+        userId: message.author.id,
+        roleIds: message.member ? [...message.member.roles.cache.keys()] : [],
+      });
+      if (!inspector.allowed) {
+        log.info({ user: message.author.id, reason: inspector.reason }, "refused a request for the prompt");
+        await message.reply("You are not on the list of people who can see my prompt.").catch(() => undefined);
+        return;
+      }
+      try {
+        const report = await manager.inspect({ session: known ?? undefined, actorId: message.author.id });
+        await message.reply({
+          content: promptSummary(report),
+          files: [new AttachmentBuilder(Buffer.from(renderPromptReport(report, cfg.BOT_TIMEZONE), "utf8"), { name: "prompt.md" })],
+        });
+      } catch (e) {
+        log.error({ err: e }, "could not build the prompt report");
+        await message.reply(`I couldn't put my prompt together: ${e instanceof Error ? e.message : String(e)}`).catch(() => undefined);
+      }
       return;
     }
 

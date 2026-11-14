@@ -78,6 +78,8 @@ export interface TurnRow {
   readonly prompt: string;
   /** The agentSessionId passed as `resume`, or null for a fresh session. */
   readonly resumedFrom: string | null;
+  /** Names the system prompt this turn ran with; null for a turn from before those were kept. */
+  readonly systemPromptHash: string | null;
   readonly result: string | null;
   readonly error: string | null;
   readonly errorSubtype: string | null;
@@ -95,6 +97,8 @@ export interface NewTurn {
   readonly actorId: string | null;
   readonly prompt: string;
   readonly resumedFrom: string | null;
+  /** What the bot told the agent this turn, beyond the message. Recorded for `prompt`. */
+  readonly systemPrompt?: string | undefined;
 }
 
 export interface FinishTurn {

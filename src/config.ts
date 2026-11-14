@@ -180,6 +180,19 @@ const ProfileSchema = z.object({
    */
   DISCORD_APPROVER_USER_IDS: csv,
   DISCORD_APPROVER_ROLE_IDS: csv,
+  /**
+   * Whether `prompt` works in Discord: the bot posting what its agent is told.
+   * Off, the word is an ordinary message. The REPL and `discordllm prompt` are
+   * the operator's own terminal and are not affected.
+   */
+  PROMPT_INSPECTION: boolDefaultTrue,
+  /**
+   * Who may ask for the prompt. Both empty means whoever may approve: the
+   * prompt says how the bot is set up, so by default it goes to the people
+   * who already decide what the bot may do.
+   */
+  DISCORD_PROMPT_USER_IDS: csv,
+  DISCORD_PROMPT_ROLE_IDS: csv,
   /** Where scheduled briefs are posted unless the schedule names a channel. */
   DISCORD_BRIEF_CHANNEL_ID: optionalString,
 });

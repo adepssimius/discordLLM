@@ -23,7 +23,8 @@ export type {
 } from "./definition.js";
 
 export { main, run, fatal } from "./run.js";
-export { chat, runChat } from "./chat.js";
+export { chat, runChat, showPrompt } from "./chat.js";
+export { renderPromptReport, promptSummary, type PromptReport } from "./inspect.js";
 export { configBot, loadBotFile, BotFileSchema } from "./configbot.js";
 export type { BotFile } from "./configbot.js";
 

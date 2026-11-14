@@ -99,6 +99,38 @@ describe.each(drivers)("store on $name", ({ open }) => {
 
   const ok = { status: "ok" as const, result: "a", error: null, errorSubtype: null, numTurns: 3, costUsd: 0.25, deniedToolCount: 0 };
 
+  describe("system prompts", () => {
+    const withPrompt = (sessionId: string, systemPrompt: string) =>
+      store.turns.begin({ sessionId, trigger: "mention", actorId: "u1", prompt: "p", resumedFrom: null, systemPrompt });
+
+    it("keeps each distinct text once and names it on the turn", async () => {
+      const s = await newSession();
+      const a = await withPrompt(s.id, "You look after a box.");
+      const b = await withPrompt(s.id, "You look after a box.");
+      const c = await withPrompt(s.id, "You look after a shed.");
+
+      const [ta, tb, tc] = [await store.turns.byId(a), await store.turns.byId(b), await store.turns.byId(c)];
+      expect(ta?.systemPromptHash).toBe(tb?.systemPromptHash);
+      expect(tc?.systemPromptHash).not.toBe(ta?.systemPromptHash);
+      expect(await store.turns.systemPrompt(ta!.systemPromptHash!)).toBe("You look after a box.");
+      expect(await store.turns.systemPrompt(tc!.systemPromptHash!)).toBe("You look after a shed.");
+      expect(await store.raw.all("SELECT hash FROM system_prompts")).toHaveLength(2);
+    });
+
+    it("leaves the hash empty for a turn that recorded none", async () => {
+      const s = await newSession();
+      expect((await store.turns.byId(await begin(s.id)))?.systemPromptHash).toBeNull();
+    });
+
+    it("finds a session's last turn whatever its status", async () => {
+      const s = await newSession();
+      expect(await store.turns.last(s.id)).toBeUndefined();
+      await store.turns.finish(await begin(s.id), ok);
+      const second = await begin(s.id);
+      expect(await store.turns.last(s.id)).toMatchObject({ id: second, seq: 2, status: "running" });
+    });
+  });
+
   describe("migrations", () => {
     it("apply once, in order", async () => {
       const rows = await store.raw.all<{ id: number; name: string }>("SELECT id, name FROM schema_migrations ORDER BY id");
@@ -107,6 +139,7 @@ describe.each(drivers)("store on $name", ({ open }) => {
         [2, "polls"],
         [3, "approvals"],
         [4, "unify"],
+        [5, "system_prompts"],
       ]);
     });
 
@@ -411,7 +444,7 @@ describe("databases from before the library", () => {
 
     // Opening it again changes nothing.
     const again = await openStore(path);
-    expect(await again.raw.all<{ id: number }>("SELECT id FROM schema_migrations ORDER BY id")).toHaveLength(4);
+    expect(await again.raw.all<{ id: number }>("SELECT id FROM schema_migrations ORDER BY id")).toHaveLength(5);
     await again.close();
   });
 

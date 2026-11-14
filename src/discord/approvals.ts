@@ -79,6 +79,28 @@ function memberRoles(member: Interaction["member"]): string[] {
   return cache ? [...cache.keys()] : [];
 }
 
+/** Who may press Approve: the approver lists, or — both empty — whoever may chat. */
+export function approverAuthz(cfg: Config): AuthzConfig {
+  const own = cfg.DISCORD_APPROVER_USER_IDS.length > 0 || cfg.DISCORD_APPROVER_ROLE_IDS.length > 0;
+  return own
+    ? { userIds: cfg.DISCORD_APPROVER_USER_IDS, roleIds: cfg.DISCORD_APPROVER_ROLE_IDS, channelGated: false }
+    : {
+        userIds: cfg.DISCORD_CHAT_USER_IDS,
+        roleIds: cfg.DISCORD_CHAT_ROLE_IDS,
+        channelGated: cfg.DISCORD_CHAT_CHANNEL_IDS.length > 0,
+      };
+}
+
+/**
+ * Who may ask the bot for its prompt, or null when that is switched off.
+ * Its own lists when either is set; otherwise whoever may approve.
+ */
+export function inspectorAuthz(cfg: Config): AuthzConfig | null {
+  if (!cfg.PROMPT_INSPECTION) return null;
+  const own = cfg.DISCORD_PROMPT_USER_IDS.length > 0 || cfg.DISCORD_PROMPT_ROLE_IDS.length > 0;
+  return own ? { userIds: cfg.DISCORD_PROMPT_USER_IDS, roleIds: cfg.DISCORD_PROMPT_ROLE_IDS, channelGated: false } : approverAuthz(cfg);
+}
+
 export class ApprovalDesk {
   private readonly pending = new Map<string, Pending>();
 
@@ -93,15 +115,7 @@ export class ApprovalDesk {
 
   /** Who may press Approve: the approver lists, or — both empty — whoever may chat. */
   private get authz(): AuthzConfig {
-    const { cfg } = this.deps;
-    const own = cfg.DISCORD_APPROVER_USER_IDS.length > 0 || cfg.DISCORD_APPROVER_ROLE_IDS.length > 0;
-    return own
-      ? { userIds: cfg.DISCORD_APPROVER_USER_IDS, roleIds: cfg.DISCORD_APPROVER_ROLE_IDS, channelGated: false }
-      : {
-          userIds: cfg.DISCORD_CHAT_USER_IDS,
-          roleIds: cfg.DISCORD_CHAT_ROLE_IDS,
-          channelGated: cfg.DISCORD_CHAT_CHANNEL_IDS.length > 0,
-        };
+    return approverAuthz(this.deps.cfg);
   }
 
   /**

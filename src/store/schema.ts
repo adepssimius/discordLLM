@@ -215,9 +215,27 @@ async function unify(db: Db): Promise<void> {
   if (!(await hasTable(db, "approvals"))) await db.exec(toDialect(APPROVALS, db.dialect));
 }
 
+/**
+ * What each turn was told, beyond the person's message.
+ *
+ * The system prompt is rebuilt every turn and is the first thing anyone wants
+ * to see when a bot misbehaves. It rarely changes, so it is stored once per
+ * distinct text and a turn carries only its hash.
+ */
+const SYSTEM_PROMPTS = `
+CREATE TABLE system_prompts (
+  hash          TEXT    PRIMARY KEY,
+  text          TEXT    NOT NULL,
+  first_used_at INTEGER NOT NULL
+) STRICT;
+
+ALTER TABLE turns ADD COLUMN system_prompt_hash TEXT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { id: 1, name: "init", sql: INIT },
   { id: 2, name: "polls", sql: POLLS },
   { id: 3, name: "approvals", sql: APPROVALS },
   { id: 4, name: "unify", run: unify },
+  { id: 5, name: "system_prompts", sql: SYSTEM_PROMPTS },
 ];

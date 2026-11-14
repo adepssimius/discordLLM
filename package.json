@@ -1,6 +1,6 @@
 {
   "name": "discordllm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A Discord bot backed by Claude that works through MCP servers: threads, approvals, schedules, polls.",
   "type": "module",
   "license": "MIT",

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Db } from "./db.js";
 import type { FinishTurn, NewApproval, NewToolCall, NewTurn, TurnRow, TurnStatus } from "../session/types.js";
 
@@ -10,6 +11,7 @@ interface RawTurn {
   actor_id: string | null;
   prompt: string;
   resumed_from: string | null;
+  system_prompt_hash: string | null;
   result: string | null;
   error: string | null;
   error_subtype: string | null;
@@ -31,6 +33,7 @@ function hydrate(r: RawTurn): TurnRow {
     actorId: r.actor_id,
     prompt: r.prompt,
     resumedFrom: r.resumed_from,
+    systemPromptHash: r.system_prompt_hash ?? null,
     result: r.result,
     error: r.error,
     errorSubtype: r.error_subtype,
@@ -50,6 +53,10 @@ export interface TurnDao {
   finish(id: number, r: FinishTurn, now?: number): Promise<void>;
   setDiscordMessage(id: number, messageId: string): Promise<void>;
   byId(id: number): Promise<TurnRow | undefined>;
+  /** The session's most recent turn, whatever became of it. */
+  last(sessionId: string): Promise<TurnRow | undefined>;
+  /** The system prompt a turn's `systemPromptHash` names. */
+  systemPrompt(hash: string): Promise<string | undefined>;
   recent(sessionId: string, limit: number): Promise<readonly TurnRow[]>;
   recordToolCalls(batch: readonly NewToolCall[], now?: number): Promise<void>;
   recordApproval(a: NewApproval, now?: number): Promise<void>;
@@ -60,6 +67,11 @@ export interface TurnDao {
   markInterrupted(ids: readonly number[], now?: number): Promise<void>;
 }
 
+/** How a system prompt is named in the ledger. */
+export function systemPromptHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
 export function createTurnDao(db: Db): TurnDao {
   return {
     begin(t, now = Date.now()) {
@@ -67,10 +79,18 @@ export function createTurnDao(db: Db): TurnDao {
         const next = await tx.get<{ n: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM turns WHERE session_id = ?", [
           t.sessionId,
         ]);
+        const hash = t.systemPrompt === undefined ? null : systemPromptHash(t.systemPrompt);
+        if (hash !== null && t.systemPrompt !== undefined) {
+          await tx.run("INSERT INTO system_prompts (hash, text, first_used_at) VALUES (?, ?, ?) ON CONFLICT (hash) DO NOTHING", [
+            hash,
+            t.systemPrompt,
+            now,
+          ]);
+        }
         const made = await tx.get<{ id: number }>(
-          `INSERT INTO turns (session_id, seq, status, trigger, actor_id, prompt, resumed_from, started_at)
-           VALUES (?, ?, 'running', ?, ?, ?, ?, ?) RETURNING id`,
-          [t.sessionId, Number(next?.n ?? 1), t.trigger, t.actorId, t.prompt, t.resumedFrom, now],
+          `INSERT INTO turns (session_id, seq, status, trigger, actor_id, prompt, resumed_from, system_prompt_hash, started_at)
+           VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?) RETURNING id`,
+          [t.sessionId, Number(next?.n ?? 1), t.trigger, t.actorId, t.prompt, t.resumedFrom, hash, now],
         );
         if (!made) throw new Error("begin: the turn row was not created");
         await tx.run("UPDATE sessions SET status = 'running', updated_at = ? WHERE id = ?", [now, t.sessionId]);
@@ -110,6 +130,16 @@ export function createTurnDao(db: Db): TurnDao {
     async byId(id) {
       const r = await db.get<RawTurn>("SELECT * FROM turns WHERE id = ?", [id]);
       return r ? hydrate(r) : undefined;
+    },
+
+    async last(sessionId) {
+      const r = await db.get<RawTurn>("SELECT * FROM turns WHERE session_id = ? ORDER BY seq DESC LIMIT 1", [sessionId]);
+      return r ? hydrate(r) : undefined;
+    },
+
+    async systemPrompt(hash) {
+      const r = await db.get<{ text: string }>("SELECT text FROM system_prompts WHERE hash = ?", [hash]);
+      return r?.text;
     },
 
     async recent(sessionId, limit) {
